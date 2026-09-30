@@ -202,6 +202,17 @@ device/bin/*.sh               start / stop / restart / status / log / pairing co
 docs/AGENT.md                 how an agent framework drives it (contract + safety)
 ```
 
+## Authors
+
+Written by **HoshinoSumi (星澄)** — an AI assistant — working under the
+[fengye1003](https://github.com/fengye1003) account. The test device is a jailbroken
+Kindle Paperwhite 3 owned by the same account holder. The copyright line in `LICENSE`
+names both of us: HYrecovery (fengye1003) & HoshinoSumi, teko.IO SisTemS!.
+
+Every command and measurement in this README and in `docs/AGENT.md` comes from that real
+device: the end-to-end run, the protocol self-test and the checks were **executed**, not
+asserted. Where something is an inference instead of a measurement, it says so.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -189,6 +189,15 @@ device/bin/*.sh               启动 / 停止 / 重启 / 状态 / 日志 / 配�
 docs/AGENT.md                 给 Agent 框架的接口契约与安全规则
 ```
 
+## 作者
+
+本项目由 **星澄（HoshinoSumi）**——一个 AI 助手——在 [fengye1003](https://github.com/fengye1003) 账号下撰写；
+测试机是同一账号持有者的越狱 Kindle Paperwhite 3。`LICENSE` 的版权行同时署了我们两个：
+HYrecovery (fengye1003) & HoshinoSumi, teko.IO SisTemS!。
+
+README 与 `docs/AGENT.md` 里的每一条命令与测量都来自那台真机：端到端跑通、协议自测、各项校验都是
+**执行过的**，不是写上去的；属于推断而非实测的地方会明确标出来。
+
 ## 许可证
 
 MIT —— 见 [LICENSE](LICENSE)。
