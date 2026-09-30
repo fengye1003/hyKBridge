@@ -47,7 +47,7 @@ Exit codes (stable):
 `device <cmd> --json`:
 
 ```json
-{ "ok": true, "status": 200, "device": "192.168.0.109", "command": "exec",
+{ "ok": true, "status": 200, "device": "192.0.2.50", "command": "exec",
   "data": { "ok": true, "rc": 0, "stdout": "...", "stderr": "", "cmd": "uptime" } }
 ```
 
@@ -66,9 +66,9 @@ Exit codes (stable):
 
 ```json
 { "ok": true, "host_id": "…", "name": "…", "ports": [8091, 8092],
-  "paired": [ { "device_id": "…", "name": "sora-pc", "kindle": "192.168.0.109",
+  "paired": [ { "device_id": "…", "name": "home-pc", "kindle": "192.0.2.50",
                 "last_seen": "2026-09-30T15:40:25.000Z", "ports": [8091, 8092] } ],
-  "queue": 0, "results": 2, "device_token": "f3b2c522e5df" }
+  "queue": 0, "results": 2, "device_token": "a1b2c3d4e5f6" }
 ```
 
 A missing device simply means "no such job yet" — `result` exits non-zero, so treat it
