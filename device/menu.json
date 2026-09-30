@@ -1,0 +1,118 @@
+{
+    "items": [
+        {
+            "name": "hyKBridge",
+            "priority": 0,
+            "items": [
+                {
+                    "name": "Show Pairing Code",
+                    "priority": 0,
+                    "action": "./bin/pair-code.sh",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Pairing code shown on screen (5 min, single use)."
+                },
+                {
+                    "name": "Pulse: Start (sleep + serve)",
+                    "priority": 1,
+                    "action": "./bin/pulse-start.sh",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Pulse started: the device wakes to serve its host."
+                },
+                {
+                    "name": "Pulse: Stop",
+                    "priority": 2,
+                    "action": "./bin/pulse-stop.sh",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Pulse stopped."
+                },
+                {
+                    "name": "Shell: Start",
+                    "priority": 3,
+                    "action": "./bin/start.sh",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Management shell started."
+                },
+                {
+                    "name": "Shell: Stop",
+                    "priority": 4,
+                    "action": "./bin/stop.sh",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Management shell stopped."
+                },
+                {
+                    "name": "Shell: Restart",
+                    "priority": 5,
+                    "action": "./bin/restart.sh",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Management shell restarted."
+                },
+                {
+                    "name": "Show Status (IP / port)",
+                    "priority": 6,
+                    "action": "./bin/status.sh",
+                    "exitmenu": false,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Status shown."
+                },
+                {
+                    "name": "Show Log (last 5 lines)",
+                    "priority": 7,
+                    "action": "./bin/log.sh",
+                    "exitmenu": false,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Access log shown."
+                },
+                {
+                    "name": "Keep Awake: ON",
+                    "priority": 8,
+                    "action": "./bin/keepawake.sh on",
+                    "exitmenu": false,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Keep awake enabled."
+                },
+                {
+                    "name": "Keep Awake: OFF",
+                    "priority": 9,
+                    "action": "./bin/keepawake.sh off",
+                    "exitmenu": false,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Keep awake disabled."
+                },
+                {
+                    "name": "Show Power State",
+                    "priority": 10,
+                    "action": "./bin/keepawake.sh status",
+                    "exitmenu": false,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Power state shown."
+                },
+                {
+                    "name": "Sleep 5s then wake (test)",
+                    "priority": 11,
+                    "action": "./bin/sleep-once.sh 5",
+                    "exitmenu": true,
+                    "checked": false,
+                    "status": false,
+                    "internal": "status Sleeping 5s then self-waking."
+                }
+            ]
+        }
+    ]
+}

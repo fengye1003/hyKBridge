@@ -1,0 +1,14 @@
+# runtime state -- NEVER commit:
+#   host/.hyKBridge/host.json holds the per-device shared secrets created at pairing.
+host/.hyKBridge/
+host/.hyKBridge-selftest/
+host/.selftest-home/
+host/_last_job.txt
+
+# device-side state (lives on the Kindle, but never let a stray copy in)
+device/state/
+
+*.log
+*.pyc
+__pycache__/
+.DS_Store

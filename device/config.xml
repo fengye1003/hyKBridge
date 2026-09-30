@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  == HyKBridge by HYrecovery & HoshinoSumi from teko.IO SisTemS! ==
+  == Under MIT Open Source License ==
+-->
+<extension>
+    <information>
+        <name>hyKBridge</name>
+        <version>0.1.0</version>
+        <author>HYrecovery &amp; HoshinoSumi (teko.IO SisTemS!)</author>
+        <id>hyKBridge</id>
+    </information>
+    <menus>
+        <menu type="json" dynamic="true">menu.json</menu>
+    </menus>
+</extension>

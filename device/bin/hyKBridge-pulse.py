@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+r"""
+hyKBridge-pulse.py -- the DEVICE side of the rendezvous.
+
+The device is the active party: it wakes on an RTC alarm, finds the host on the
+LAN, and pulls a command. The host's HTTP response body IS the command.
+
+Security rule that matters most: every response is signed by the host with
+    X-Host-Sig = HMAC-SHA256(secret, body)
+and we VERIFY it before doing anything. Commands run as root on this device, so a
+rogue "host" on the LAN is the real threat -- an unsigned or mis-signed body is
+discarded, never executed. (Responses from /file/ are signed over sha256(data).)
+
+Never forces a suspend: it only ARMS an RTC alarm and lets powerd sleep when it
+wants. If wireless is off (airplane mode) it short-circuits: no poll, no alarm,
+no wake.
+"""
+from __future__ import print_function
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DIR = '/mnt/us/extensions/hyKBridge'
+STATE = os.path.join(DIR, 'state')
+LOG = os.path.join(STATE, 'pulse.log')
+OUTBOX = os.path.join(STATE, 'outbox')
+PAIRED = os.path.join(STATE, 'paired.json')
+FLAG = os.path.join(STATE, 'pulse-on')
+RTC = '/sys/class/rtc/rtc0/wakealarm'
+DOCS = '/mnt/us/documents'
+BEACON_PORT = 8093
+CMD_TIMEOUT = 90
+
+
+def log(msg):
+    line = '%s %s' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg)
+    try:
+        with open(LOG, 'a') as f:
+            f.write(line + '\n')
+    except IOError:
+        pass
+    print('[i] ' + msg)
+
+
+def eips(row, text):
+    try:
+        subprocess.call(['eips', '2', str(row), str(text)[:50]])
+    except Exception:
+        pass
+
+
+def sh(cmd, cwd='/mnt/us', timeout=CMD_TIMEOUT):
+    """Run a command, bounded by timeout(1) if it exists."""
+    full = cmd
+    if os.path.exists('/usr/bin/timeout') or os.path.exists('/bin/timeout'):
+        full = 'timeout -t %d sh -c %s' % (timeout, _q(cmd))
+    else:
+        full = 'sh -c %s' % _q(cmd)
+    p = subprocess.Popen(full, shell=True, cwd=cwd,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    return p.returncode, _dec(out) + _dec(err)
+
+
+def _q(s):
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _dec(b):
+    return b.decode('utf-8', 'replace') if b else ''
+
+
+def read_state(name, default=None):
+    try:
+        with open(os.path.join(STATE, name)) as f:
+            v = f.read().strip()
+        return v or default
+    except IOError:
+        return default
+
+
+def load_paired():
+    try:
+        with open(PAIRED) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def wireless_off():
+    """Airplane mode / wireless off => short circuit.
+
+    Judged by the explicit switch, NOT wlan0's operstate: right after resume wlan0
+    is not re-associated yet, and reading that as 'airplane mode' would mean we
+    never arm another alarm and never wake again.
+    """
+    try:
+        out = subprocess.check_output(['lipc-get-prop', 'com.lab126.wifid', 'enable'],
+                                      stderr=subprocess.STDOUT)
+        return out.decode().strip() == '0'
+    except Exception:
+        return False
+
+
+def keep_awake(on):
+    """Hold the device reachable for the duration of the window (runtime only)."""
+    try:
+        subprocess.call(['lipc-set-prop', 'com.lab126.powerd', 'preventScreenSaver',
+                         '1' if on else '0'])
+    except Exception:
+        pass
+
+
+def arm_alarm(seconds):
+    try:
+        with open(RTC, 'w') as f:
+            f.write('0')
+        with open(RTC, 'w') as f:
+            f.write('+%d' % seconds)
+        with open(RTC) as f:
+            return f.read().strip()
+    except Exception:
+        return ''
+
+
+# ── host discovery ───────────────────────────────────────────────
+def hello(ip, port, timeout=3):
+    try:
+        r = urllib.request.urlopen('http://%s:%d/__hello' % (ip, port), timeout=timeout)
+        j = json.loads(r.read().decode('utf-8'))
+        if j.get('app') == 'hyKBridge':
+            return j
+    except Exception:
+        pass
+    return None
+
+
+def find_host(rec):
+    """1) the remembered address  2) the UDP beacon.  (LAN only, short timeouts.)"""
+    ip = rec.get('host_ip')
+    ports = rec.get('ports') or [8091, 8092]
+    if ip:
+        for p in ports:
+            if hello(ip, p):
+                return ip, p
+    # beacon: the host broadcasts its address every 2s
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.settimeout(6)
+    try:
+        s.bind(('', BEACON_PORT))
+        t0 = time.time()
+        while time.time() - t0 < 6:
+            data, addr = s.recvfrom(1024)
+            txt = data.decode('utf-8', 'replace')
+            if not txt.startswith('HYKBRIDGE1 '):
+                continue
+            try:
+                j = json.loads(txt[11:])
+            except ValueError:
+                continue
+            p = int(j.get('port') or 0)
+            if p and hello(addr[0], p, 2):
+                log('found host by beacon: %s:%d' % (addr[0], p))
+                return addr[0], p
+    except socket.timeout:
+        pass
+    except Exception:
+        pass
+    finally:
+        s.close()
+    return None, None
+
+
+def remember(rec, ip, port):
+    """Update the remembered address (the host never has to be configured by hand)."""
+    all_paired = load_paired()
+    dev = rec.get('device_id')
+    if dev and dev in all_paired:
+        all_paired[dev]['host_ip'] = ip
+        tmp = PAIRED + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(all_paired, f, indent=1)
+        os.remove(PAIRED)
+        os.rename(tmp, PAIRED)
+
+
+def sign(secret, dev, method, path, ts=None):
+    ts = ts or int(time.time())
+    msg = '|'.join([dev, str(ts), method, path]).encode('utf-8')
+    return {'X-Dev': dev, 'X-Ts': str(ts),
+            'X-Sig': hmac.new(secret.encode('utf-8'), msg, hashlib.sha256).hexdigest()}
+
+
+def get(rec, ip, port, path, timeout):
+    req = urllib.request.Request('http://%s:%d%s' % (ip, port, path))
+    for k, v in sign(rec['secret'], rec['device_id'], 'GET', path.split('?')[0]).items():
+        req.add_header(k, v)
+    try:
+        r = urllib.request.urlopen(req, timeout=timeout)
+        return r.getcode(), r.read(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+    except Exception as e:
+        return 0, str(e).encode(), {}
+
+
+def post_result(rec, ip, port, job, text):
+    path = '/result'
+    body = text.encode('utf-8')
+    req = urllib.request.Request('http://%s:%d%s?job=%s' % (ip, port, path, job), data=body)
+    req.add_header('Content-Type', 'text/plain; charset=utf-8')
+    for k, v in sign(rec['secret'], rec['device_id'], 'POST', path).items():
+        req.add_header(k, v)
+    try:
+        urllib.request.urlopen(req, timeout=15).read()
+        return True
+    except Exception as e:
+        log('post result failed: %s' % e)
+        return False
+
+
+def verify(secret, body, sig):
+    if not sig:
+        return False
+    want = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, sig)
+
+
+# ── one cycle ────────────────────────────────────────────────────
+def do_cycle(rec, interval):
+    ip, port = find_host(rec)
+    if not ip:
+        log('no host found this cycle (remembered %s, no beacon)' % rec.get('host_ip'))
+        return
+    remember(rec, ip, port)
+
+    path = '/next?dev=%s&hold=20' % rec['device_id']
+    code, body, hdrs = get(rec, ip, port, path, timeout=30)
+    if code == 204 or code == 0:
+        return
+    if code != 200:
+        log('next -> HTTP %s' % code)
+        return
+
+    sig = hdrs.get('X-Host-Sig') or hdrs.get('x-host-sig')
+    if not verify(rec['secret'], body, sig):
+        log('*** SIGNATURE MISMATCH from %s -- refusing to execute ***' % ip)
+        eips(3, 'hyKBridge: bad host signature')
+        return
+
+    job = hdrs.get('X-Job-Id') or hdrs.get('x-job-id') or 'unknown'
+    jtype = (hdrs.get('X-Job-Type') or hdrs.get('x-job-type') or 'exec').lower()
+
+    if jtype == 'file':
+        try:
+            meta = json.loads(body.decode('utf-8'))
+        except ValueError:
+            log('bad file job payload for %s' % job)
+            return
+        name = os.path.basename(meta.get('name') or 'book.bin')
+        fcode, data, fh = get(rec, ip, port, '/file/%s' % job, timeout=120)
+        fsig = fh.get('X-Host-Sig') or fh.get('x-host-sig')
+        if fcode != 200 or not data:
+            log('file %s download failed (HTTP %s)' % (name, fcode))
+            return
+        want = hmac.new(rec['secret'].encode('utf-8'),
+                        hashlib.sha256(data).hexdigest().encode('utf-8'),
+                        hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(want, fsig or ''):
+            log('*** FILE SIGNATURE MISMATCH for %s -- not writing ***' % name)
+            return
+        dest = os.path.join(DOCS, name)
+        tmp = dest + '.hykbridge-part'
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        if os.path.exists(dest):
+            os.remove(dest)
+        os.rename(tmp, dest)
+        log('file %s saved (%d bytes)' % (name, len(data)))
+        post_result(rec, ip, port, job, 'rc=0\nsaved to %s\nbytes=%d\n' % (dest, len(data)))
+        return
+
+    # exec: the body IS the command
+    cmd = body.decode('utf-8', 'replace')
+    log('job %s exec: %s' % (job, cmd.split('\n')[0][:80]))
+    rc, out = sh(cmd)
+    text = 'rc=%d\ncmd=%s\n--- output ---\n%s\n' % (rc, cmd, out)
+    # persist first: if the host vanished mid-flight we still owe it an answer
+    if not os.path.isdir(OUTBOX):
+        os.makedirs(OUTBOX)
+    with open(os.path.join(OUTBOX, job + '.txt'), 'w') as f:
+        f.write(text)
+    if post_result(rec, ip, port, job, text):
+        try:
+            os.remove(os.path.join(OUTBOX, job + '.txt'))
+        except OSError:
+            pass
+    log('job %s done rc=%d' % (job, rc))
+
+
+def deliver_outbox(rec, ip, port):
+    if not os.path.isdir(OUTBOX):
+        return
+    for fn in sorted(os.listdir(OUTBOX)):
+        if not fn.endswith('.txt'):
+            continue
+        p = os.path.join(OUTBOX, fn)
+        try:
+            with open(p) as f:
+                text = f.read()
+            if post_result(rec, ip, port, fn[:-4], text):
+                os.remove(p)
+                log('outbox: delivered %s' % fn[:-4])
+        except Exception:
+            pass
+
+
+def main():
+    if not os.path.exists(FLAG):
+        log('pulse-on flag missing -- nothing to do')
+        return 0
+    paired = load_paired()
+    if not paired:
+        log('no paired host -- run KUAL > hyKBridge > Show Pairing Code first')
+        eips(3, 'hyKBridge: not paired yet')
+        return 1
+    dev, rec = list(paired.items())[0]
+    rec['device_id'] = rec.get('device_id') or dev
+    if 'secret' not in rec:
+        log('paired record has no secret')
+        return 1
+
+    interval = int(read_state('pulse-interval', '120') or 120)
+    log('== HyKBridge by HYrecovery & HoshinoSumi from teko.IO SisTemS! ==')
+    log('== Under MIT Open Source License ==')
+    log('pulse START interval=%ds host=%s (arm-only, never suspends)' % (interval, rec.get('host_ip')))
+    eips(3, 'hyKBridge pulse: every %ds' % interval)
+
+    cycle = 0
+    while os.path.exists(FLAG):
+        cycle += 1
+        if wireless_off():
+            try:
+                with open(RTC, 'w') as f:
+                    f.write('0')
+            except Exception:
+                pass
+            log('cycle %d: wireless OFF (airplane mode) -> short circuit' % cycle)
+            while os.path.exists(FLAG) and wireless_off():
+                time.sleep(15)
+            continue
+
+        keep_awake(True)                    # hold the window open while we talk
+        try:
+            ip, port = find_host(rec)
+            if ip:
+                remember(rec, ip, port)
+                deliver_outbox(rec, ip, port)
+                do_cycle(rec, interval)
+        finally:
+            keep_awake(False)
+
+        if not os.path.exists(FLAG):
+            break
+        alarm = arm_alarm(interval)
+        deadline = time.time() + interval
+        log('cycle %d: alarm=%s idle wait %ds' % (cycle, alarm or 'FAILED', interval))
+        while os.path.exists(FLAG) and time.time() < deadline:
+            time.sleep(3)
+
+    log('pulse STOP')
+    eips(3, 'hyKBridge pulse: stopped')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)
