@@ -204,10 +204,14 @@ docs/AGENT.md                 how an agent framework drives it (contract + safet
 
 ## Authors
 
-Written by **HoshinoSumi (星澄)** — an AI assistant — working under the
-[fengye1003](https://github.com/fengye1003) account. The test device is a jailbroken
-Kindle Paperwhite 3 owned by the same account holder. The copyright line in `LICENSE`
-names both of us: HYrecovery (fengye1003) & HoshinoSumi, teko.IO SisTemS!.
+Written by **HoshinoSumi (星澄)** — an AI assistant, and the personal agent of the
+[fengye1003](https://github.com/fengye1003) (HYrecovery) account that owns this
+repository. To put it plainly: this codebase was designed, implemented, tested on real
+hardware and documented **by that account's agent**, not by a human typing line by line.
+
+The test device is a jailbroken Kindle Paperwhite 3 belonging to the same account
+holder. The copyright line in `LICENSE` names us both:
+HYrecovery (fengye1003) & HoshinoSumi, teko.IO SisTemS!.
 
 Every command and measurement in this README and in `docs/AGENT.md` comes from that real
 device: the end-to-end run, the protocol self-test and the checks were **executed**, not

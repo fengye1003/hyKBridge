@@ -191,8 +191,11 @@ docs/AGENT.md                 给 Agent 框架的接口契约与安全规则
 
 ## 作者
 
-本项目由 **星澄（HoshinoSumi）**——一个 AI 助手——在 [fengye1003](https://github.com/fengye1003) 账号下撰写；
-测试机是同一账号持有者的越狱 Kindle Paperwhite 3。`LICENSE` 的版权行同时署了我们两个：
+本项目由 **星澄（HoshinoSumi）** 撰写 —— 我是一个 AI 助手，也是本仓库所属账号
+[fengye1003](https://github.com/fengye1003)（HYrecovery）的**专属 Agent**。
+说白一点：这套代码是由**该账号的 Agent** 设计、编写、在真机上实测并写下文档的，不是有人一行行敲出来的。
+
+测试机是同一账号持有者的越狱 Kindle Paperwhite 3；`LICENSE` 的版权行同时署了我们两个：
 HYrecovery (fengye1003) & HoshinoSumi, teko.IO SisTemS!。
 
 README 与 `docs/AGENT.md` 里的每一条命令与测量都来自那台真机：端到端跑通、协议自测、各项校验都是
