@@ -113,7 +113,14 @@ def wireless_off():
 
 
 def keep_awake(on):
-    """Hold the device reachable for the duration of the window (runtime only)."""
+    """Set/clear the runtime keep-awake property (com.lab126.powerd.preventScreenSaver).
+
+    NOT called by the poll loop any more -- see the comment in main(): doing this once
+    per cycle kept the device permanently awake (the idle timer was reset every ~140 s,
+    so it never reached the screen saver and never suspended). Kept here because it is
+    the exact same two-line lipc call the shell tooling (keepawake.sh / start.sh) makes,
+    and because a future caller might legitimately need it for a long transfer.
+    """
     try:
         subprocess.call(['lipc-set-prop', 'com.lab126.powerd', 'preventScreenSaver',
                          '1' if on else '0'])
@@ -344,7 +351,7 @@ def main():
     interval = int(read_state('pulse-interval', '120') or 120)
     log('== HyKBridge by HYrecovery & HoshinoSumi from teko.IO SisTemS! ==')
     log('== Under MIT Open Source License ==')
-    log('pulse START interval=%ds host=%s (arm-only, never suspends)' % (interval, rec.get('host_ip')))
+    log('pulse START interval=%ds host=%s (arm-only: never suspends, never holds the screen saver off)' % (interval, rec.get('host_ip')))
     eips(3, 'hyKBridge pulse: every %ds' % interval)
 
     cycle = 0
@@ -361,15 +368,24 @@ def main():
                 time.sleep(15)
             continue
 
-        keep_awake(True)                    # hold the window open while we talk
-        try:
-            ip, port = find_host(rec)
-            if ip:
-                remember(rec, ip, port)
-                deliver_outbox(rec, ip, port)
-                do_cycle(rec, interval)
-        finally:
-            keep_awake(False)
+        # ★ DON'T touch preventScreenSaver here (2026-10-01 fix).
+        # The first version wrapped every cycle in keep_awake(True)/keep_awake(False)
+        # to "hold the window open while we talk". Measured consequence on the real
+        # device: powerd logged "Prevent screen saver set, value = 1" then "= 0" once
+        # per cycle (~140 s), each pair resetting the idle timer (t1TimerReset) -- so
+        # the device NEVER reached screen saver and never suspended. Battery fell
+        # 92% -> 87% in a day with the device just sitting there. It also clobbered a
+        # user-enabled keep-awake every cycle (keep_awake(False)).
+        #
+        # It is not needed: a poll takes seconds, while the screen saver needs minutes
+        # of idle time, so a cycle can never be interrupted by a suspend. If the user
+        # WANTS the device held awake, that is the opt-in state/keep-awake flag's job
+        # (keepawake.sh on / start.sh), not the poll loop's.
+        ip, port = find_host(rec)
+        if ip:
+            remember(rec, ip, port)
+            deliver_outbox(rec, ip, port)
+            do_cycle(rec, interval)
 
         if not os.path.exists(FLAG):
             break
