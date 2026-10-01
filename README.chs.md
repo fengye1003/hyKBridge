@@ -126,7 +126,7 @@ node host/hyKBridge.mjs status --json              # 两个通道的就绪情况
 （0 成功 / 1 失败 / 2 用法 / 3 无口令 / 4 设备不可达 / 124 超时）。
 
 设备上 **hyKBridge → Pulse: Start** 开始"醒来-轮询-睡觉"循环
-（`state/pulse-interval`，默认 120 秒）。Pulse 从不强制挂起：它只装 RTC 闹钟，让系统
+（`state/pulse-interval`，默认 120 秒）。Pulse 从不强制挂起、也从不阻止屏保（保持常亮是 opt-in 的 Keep Awake 菜单项的职责）：它只装 RTC 闹钟，让系统
 自己决定什么时候睡，所以你用设备的时候永远不会被打断。
 
 ## 接口

@@ -134,7 +134,7 @@ Add `--json` to any subcommand to get a single JSON object on stdout and a stabl
 code (0 ok / 1 error / 2 usage / 3 no token / 4 device unreachable / 124 timeout).
 
 On the device, **hyKBridge → Pulse: Start** begins the wake-poll-sleep loop
-(`state/pulse-interval`, default 120 s). Pulse never forces a suspend: it only arms an
+(`state/pulse-interval`, default 120 s). Pulse never forces a suspend and never holds the screen saver off: it only arms an
 RTC alarm and lets the system sleep when it wants, so using the device is never
 interrupted.
 
