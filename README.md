@@ -149,6 +149,25 @@ latency/battery trade-off — every wake costs one WiFi re-association.
 > hand-armed alarm followed by `echo mem` — the alarm always fires. Same device, same
 > alarm, opposite outcome; the only variable is *who* initiates the suspend.
 
+## How Pulse sleeps (and why it must own the suspend)
+
+The loop watches the screen state. **Within ~15 s of the screen going off it takes over**
+and suspends the device itself (`rtcwake -m mem -s <interval>`); the RTC alarm then wakes
+it for the next cycle. While you are reading it never suspends anything, and it keeps
+syncing every few minutes (`state/pulse-interval-awake`, default 180 s).
+
+Two measured facts (real PW3, 2026-10-01) are the whole reason for that shape:
+
+* **A suspend powerd initiates on its own is not woken by an alarm you armed beforehand.**
+  The device slept 4.4 hours with zero polls. So "arm the alarm and let the device sleep
+  by itself" does not work -- the loop has to own the suspend.
+* **Your power button still works.** With the loop owning the suspend, pressing it woke the
+  device 100 s after it had gone to sleep, long before the 300 s alarm was due.
+
+So the interval is only a latency/battery trade-off (every wake costs one WiFi
+re-association). If the loop is not running -- or powerd wins the race -- the device sleeps
+until a human wakes it; that is inherent, and it is why **Pulse: Start** matters.
+
 ## Endpoints
 
 | Method | Path | Auth | Purpose |

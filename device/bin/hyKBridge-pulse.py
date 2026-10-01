@@ -116,10 +116,12 @@ def sleep_until_next_cycle(cycle, interval):
     """
     st = power_state()
     if st not in ('screensaver', 'ready'):
-        log('cycle %d: NOT suspending (powerd=%s -- user is using it); wait %ds' % (cycle, st or '?', interval))
-        deadline = time.time() + interval
-        while os.path.exists(FLAG) and time.time() < deadline:
-            time.sleep(3)
+        # The user is reading: never suspend, but do keep syncing every few minutes --
+        # the CPU and WiFi are on anyway, so a poll costs almost nothing and cannot
+        # disturb reading (no screen writes, one small HTTP request).
+        awake = int(read_state('pulse-interval-awake', '180') or 180)
+        log('cycle %d: awake (powerd=%s) -- not suspending; next poll in %ds' % (cycle, st or '?', awake))
+        wait_wakeable(awake, cycle)
         return
     if os.path.exists('/usr/sbin/rtcwake'):
         # explicit timeout: sh() wraps commands with timeout(1), and the default would
@@ -133,12 +135,48 @@ def sleep_until_next_cycle(cycle, interval):
     alarm = arm_alarm(interval)
     if not alarm:
         log('cycle %d: no alarm armed -- NOT suspending (it would never wake)' % cycle)
-        deadline = time.time() + interval
-        while os.path.exists(FLAG) and time.time() < deadline:
-            time.sleep(3)
+        wait_wakeable(interval, cycle)
         return
     log('cycle %d: alarm=%s (no rtcwake available) -- suspending by hand' % (cycle, alarm))
     sh('sync; echo mem > /sys/power/state')
+
+
+def wait_wakeable(secs, cycle):
+    """Wait, but return the moment either (a) the screen goes off, or (b) we were woken.
+
+    Agreed behaviour (user, 2026-10-01): sync on every manual wake, and every few minutes
+    while awake, without loading the device or disturbing reading. And -- the important
+    one -- the device must still wake ITSELF after the user simply lets it fall into the
+    screen saver. The user's only sleep path IS the screen saver; suspending the device
+    from a shell is something they will never do, so it must not be a precondition.
+
+    Why (a) matters: powerd takes roughly two minutes from screen-off to actually
+    suspending, and a suspend that powerd initiates is NOT woken by an alarm we armed
+    beforehand (measured). So as soon as the screen goes off we hand over to the
+    alarm-driven sleep ourselves, well inside that two-minute window; from then on the
+    wake-ups are ours. The screen check runs every 15 s -- one tiny lipc call, and it keeps
+    a large margin before powerd's own suspend.
+
+    Why (b) matters: if powerd did get there first, a 3 s sleep that took more than 30 s of
+    wall time can only mean we were suspended, so we poll right away instead of finishing a
+    long wait (this is also the "sync as soon as a human wakes it" case).
+    """
+    deadline = time.time() + secs
+    last = time.time()
+    last_check = 0.0
+    while os.path.exists(FLAG) and time.time() < deadline:
+        time.sleep(3)
+        now = time.time()
+        if now - last > 30:
+            log('cycle %d: resumed from a powerd-owned suspend -- polling right away' % cycle)
+            return
+        last = now
+        if now - last_check >= 15:
+            last_check = now
+            st = power_state()
+            if st in ('screensaver', 'ready'):
+                log('cycle %d: screen went off (powerd=%s) -- taking over the suspend now' % (cycle, st))
+                return
 
 
 def read_state(name, default=None):
