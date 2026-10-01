@@ -12,3 +12,4 @@ device/state/
 *.pyc
 __pycache__/
 .DS_Store
+device/tests/_unit.py

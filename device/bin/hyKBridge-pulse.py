@@ -12,9 +12,10 @@ and we VERIFY it before doing anything. Commands run as root on this device, so 
 rogue "host" on the LAN is the real threat -- an unsigned or mis-signed body is
 discarded, never executed. (Responses from /file/ are signed over sha256(data).)
 
-Never forces a suspend: it only ARMS an RTC alarm and lets powerd sleep when it
-wants. If wireless is off (airplane mode) it short-circuits: no poll, no alarm,
-no wake.
+Never suspends while you are reading: it takes over the suspend itself (rtcwake) only
+once the screen is already off, because a suspend powerd starts on its own is never woken
+by an alarm we armed beforehand (measured -- see sleep_until_next_cycle). If wireless is
+off (airplane mode) it short-circuits: no poll, no alarm, no wake.
 """
 from __future__ import print_function
 
@@ -84,6 +85,24 @@ def power_state():
     return sh('lipc-get-prop com.lab126.powerd state')[1].strip().lower()
 
 
+# ★ powerd states that mean "the screen is off", i.e. safe for us to take the suspend.
+#   `active` is the ONLY state where the user is holding a lit device -- that is reading.
+#
+#   `readytosuspend` is the one that bit us (measured 2026-10-01, cost 29 minutes of dead
+#   air and a queued book): it means powerd is about to suspend the device itself, and it
+#   is ALSO what powerd reports for a while right after one of our own rtcwake resumes while
+#   the screen is still off. Cycle 3 woke at 15:25:50, read `readytosuspend` at 15:26:15,
+#   did not recognise it, assumed "the user must be reading", and went back to a 180 s wait.
+#   powerd suspended inside that window -- and a powerd-owned suspend ignores an alarm we
+#   armed beforehand, so nothing woke the device until the power button was pressed at
+#   15:55. The screen was off the whole time; the state name just never matched.
+SCREEN_OFF_STATES = ('screensaver', 'ready', 'readytosuspend')
+
+
+def screen_is_off(state=None):
+    return (state if state is not None else power_state()) in SCREEN_OFF_STATES
+
+
 def wait_for_network(timeout=45):
     """Wait until wlan0 actually has an IP.
 
@@ -111,15 +130,17 @@ def sleep_until_next_cycle(cycle, interval):
       `rtcwake -d /dev/rtc0 -m mem -s 60` suspends and comes back reliably, because it
       sets the alarm through the RTC ioctl and owns the suspend itself.
 
-    Guard: only suspend when the screen is already off. If the user is reading
-    (state is not screenSaver/Ready) we just wait -- using the device is never interrupted.
+    Guard: only suspend when the screen is already off (see SCREEN_OFF_STATES). If the user
+    is reading -- state `active` -- we just wait; using the device is never interrupted.
     """
     st = power_state()
-    if st not in ('screensaver', 'ready'):
+    if not screen_is_off(st):
         # The user is reading: never suspend, but do keep syncing every few minutes --
         # the CPU and WiFi are on anyway, so a poll costs almost nothing and cannot
         # disturb reading (no screen writes, one small HTTP request).
-        awake = int(read_state('pulse-interval-awake', '180') or 180)
+        # Kept tight (120 s, not 300 s) on purpose: if powerd ever mis-reports a lit device
+        # as idle we want to be back to check before its ~2 min path to suspend completes.
+        awake = int(read_state('pulse-interval-awake', '120') or 120)
         log('cycle %d: awake (powerd=%s) -- not suspending; next poll in %ds' % (cycle, st or '?', awake))
         wait_wakeable(awake, cycle)
         return
@@ -174,7 +195,7 @@ def wait_wakeable(secs, cycle):
         if now - last_check >= 15:
             last_check = now
             st = power_state()
-            if st in ('screensaver', 'ready'):
+            if screen_is_off(st):
                 log('cycle %d: screen went off (powerd=%s) -- taking over the suspend now' % (cycle, st))
                 return
 
@@ -452,9 +473,10 @@ def main():
     # the device can sleep at all. (An earlier version armed the alarm by hand and let powerd
     # suspend on its own; measured 2026-10-01, a powerd-initiated suspend NEVER honours a
     # pre-armed alarm: the device slept 4.4 hours with zero cycles. See sleep_until_next_cycle.)
-    # Cost per wake = WiFi re-association + a few seconds of CPU. 900 s is the gentle default;
-    # lower it if a queued book should arrive sooner.
-    interval = int(read_state('pulse-interval', '900') or 900)
+    # Cost per wake = WiFi re-association + a few seconds of CPU. 300 s (5 min) is the shipped
+    # default: now that the loop owns the suspend, the interval is pure latency -- nobody wants
+    # a book pushed by mail to wait a quarter of an hour. Raise it to save battery.
+    interval = int(read_state('pulse-interval', '300') or 300)
     log('== HyKBridge by HYrecovery & HoshinoSumi from teko.IO SisTemS! ==')
     log('== Under MIT Open Source License ==')
     log('pulse START interval=%ds host=%s (owns the suspend via rtcwake when the screen is off)' % (interval, rec.get('host_ip')))

@@ -132,13 +132,21 @@ node host/hyKBridge.mjs status --json              # 两个通道的就绪情况
 
 循环盯着屏幕状态：**屏幕一灭，15 秒内它就接管**，自己用 `rtcwake -m mem -s <间隔>` 把设备挂起；
 之后由 RTC 闹钟叫醒进入下一轮。**你读书时它绝不挂起**，但每几分钟照常同步一次
-（`state/pulse-interval-awake`，默认 180 秒）。
+（`state/pulse-interval-awake`，默认 120 秒）。
 
-这个形状完全由两条实测决定（真机 PW3，2026-10-01）：
+"屏幕已灭"的判据是 `powerd state` 属于 **`screensaver` / `ready` / `readytosuspend`** 之一；
+**只有 `active` 才算你正捧着亮屏的设备**。第三个名字很要命：它既是 powerd 自己将要挂起前的瞬间，
+**也是我们自己的 rtcwake 醒来后、屏幕仍然黑着时 powerd 会报的状态**。早先的版本只认前两个，
+于是醒来后读到 `readytosuspend`，误判成"用户正在阅读"，又回去等 180 秒 —— powerd 就在这窗口里
+抢先挂起，**排好的书因此卡了 29 分钟**，直到有人按下电源键。
+
+这个形状完全由三条实测决定（真机 PW3，2026-10-01）：
 
 * **powerd 自己发起的挂起，不会被我们预先装好的闹钟唤醒** —— 实测睡了 4.4 小时、零轮询。
   所以"我装闹钟、让它自己睡"这条路根本不通，**必须由循环掌管挂起**。
 * **你的电源键照样有效**：在循环掌管的挂起里，你按下去后 100 秒就醒了，远早于当时 300 秒的闹钟。
+* **不需要任何唤醒源也能察觉"刚被唤醒"**：循环的 3 秒心跳会跟墙钟比对，跳变超过 30 秒只可能是
+  设备被挂起过，于是立刻轮询。实机上正是这一条，让手动按醒的设备在 **6 秒**内取走了排队中的 7 MB 电子书。
 
 所以间隔只是"延迟 vs 唤醒开销"的取舍（每次唤醒要重连一次 WiFi）。如果循环没在跑——或 powerd 抢在前面——
 设备会一直睡到有人去唤醒它；这是固有的，也正是 **Pulse: Start** 重要性的来源。
@@ -160,13 +168,39 @@ node host/hyKBridge.mjs status --json              # 两个通道的就绪情况
 ## 自己验证
 
 ```bash
-node host/selftest.mjs
+node host/selftest.mjs              # 协议层，两端都在本地跑，不需要设备
+python tools/check-device-python.py  # 往设备上拷之前先跑（不带参数 = 扫 device/）
+node host/watch-sleep.mjs --need 3  # 真机上跑：证明它**能把自己叫醒**
 ```
 
-在本地同时扮演两端：没凭据 401、时间戳过期 401、密钥不对 401、长轮询真的会挂住、
-body 就是命令、改一个字节签名就废、结果被存下来且任务被清掉。
+`host/selftest.mjs` 在本地同时扮演两端：没凭据 401、时间戳过期 401、密钥不对 401、
+长轮询真的会挂住、body 就是命令、改一个字节签名就废、结果被存下来且任务被清掉。
 
 期望输出：`RESULT: 10 passed, 0 failed`。
+
+`tools/check-device-python.py` 把设备侧每个脚本都解析一遍，专抓 `ast.parse` 看不见的那种坏法：
+**调用了已经不存在的名字**（函数改名后漏掉的调用点）。顺带也查 UTF-8 BOM，以及 shell 脚本里的
+CRLF / 非 ASCII 字符。往一台不好调试的设备上拷东西之前，先跑它。
+
+`host/watch-sleep.mjs` 是最要紧的一个，因为**"它醒过一次"什么也证明不了** —— 设备可以醒两次、
+然后输掉挂起竞争，一直睡到你走过去按电源键。所以它一直盯到**连续 N 次自唤醒、且全程没人碰设备**
+为止；一旦出现超长间隔或者 `resumed from a powerd-owned suspend` 那一行，立刻判 FAIL。
+
+```bash
+node host/watch-sleep.mjs --minutes 75 --need 3 --interval 300
+# PASS 3 consecutive self-wakes, worst gap 301s
+```
+
+跑的时候别碰设备（它需要屏幕自己灭掉；你正在看书时它的裁决是 INCONCLUSIVE，那不是失败）。
+同一条判据在设备上也有一份断言：
+
+```bash
+node host/hyKBridge.mjs device put device/tests/pulse-unit.py \
+     /mnt/us/extensions/hyKBridge/state/pulse-unit.py --write
+node host/hyKBridge.mjs device exec \
+     '/mnt/us/python3/bin/python3.9 /mnt/us/extensions/hyKBridge/state/pulse-unit.py'
+# RESULT: 5 passed, 0 failed
+```
 
 `exec` / `push` / `result` 的横幅走 **stderr**，所以 stdout 依然可以安全管道；
 想彻底关掉就设 `HYKBRIDGE_QUIET=1`。
@@ -195,12 +229,15 @@ body 就是命令、改一个字节签名就废、结果被存下来且任务被
 ```
 host/hyKBridge.mjs        主机应用（单文件，零 npm 依赖）
 host/selftest.mjs         协议自测
+host/watch-sleep.mjs      真机上盯到"连续 N 次自唤醒"为止的守望器
+tools/check-device-python.py  设备脚本的部署前检查（专抓改名后残留的调用点）
 device/config.xml         KUAL 扩展清单
 device/menu.json          KUAL 菜单
 device/server/hyKBridge.py    设备服务：执行 / 文件 / 书籍 / 插件 / 配对
 device/bin/hyKBridge-pulse.py 醒来-轮询-睡觉的客户端
 device/bin/banner.sh          版权横幅（被所有脚本 source）
 device/bin/*.sh               启动 / 停止 / 重启 / 状态 / 日志 / 配对码 / 保持常亮
+device/tests/pulse-unit.py    屏幕状态判据的设备端断言
 docs/AGENT.md                 给 Agent 框架的接口契约与安全规则
 ```
 

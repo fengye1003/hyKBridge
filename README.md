@@ -154,15 +154,27 @@ latency/battery trade-off — every wake costs one WiFi re-association.
 The loop watches the screen state. **Within ~15 s of the screen going off it takes over**
 and suspends the device itself (`rtcwake -m mem -s <interval>`); the RTC alarm then wakes
 it for the next cycle. While you are reading it never suspends anything, and it keeps
-syncing every few minutes (`state/pulse-interval-awake`, default 180 s).
+syncing every few minutes (`state/pulse-interval-awake`, default 120 s).
 
-Two measured facts (real PW3, 2026-10-01) are the whole reason for that shape:
+Screen-off means `powerd state` is any of **`screensaver`, `ready`, `readytosuspend`**.
+Only `active` means you are holding a lit device. That third name matters: it is both the
+instant just before powerd suspends *and* what powerd reports for a while after one of our
+own resumes while the screen is still off. An earlier version only recognised the first
+two, so after a resume it read `readytosuspend`, assumed "the user must be reading", and
+waited 180 s — powerd suspended in that window, and **the queued book sat there for 29
+minutes** until someone pressed the power button.
+
+Three measured facts (real PW3, 2026-10-01) are the whole reason for that shape:
 
 * **A suspend powerd initiates on its own is not woken by an alarm you armed beforehand.**
   The device slept 4.4 hours with zero polls. So "arm the alarm and let the device sleep
   by itself" does not work -- the loop has to own the suspend.
 * **Your power button still works.** With the loop owning the suspend, pressing it woke the
   device 100 s after it had gone to sleep, long before the 300 s alarm was due.
+* **A resume is detectable without any wake source.** The loop's 3 s ticks are compared
+  against the wall clock: a jump of more than 30 s can only mean the device was suspended,
+  so it polls immediately. In the field this is what made a hand-woken device fetch the
+  waiting 7 MB book **6 s** after the power button was pressed.
 
 So the interval is only a latency/battery trade-off (every wake costs one WiFi
 re-association). If the loop is not running -- or powerd wins the race -- the device sleeps
@@ -185,14 +197,43 @@ DIRECT channel drives. See `docs/AGENT.md`.
 ## Verify it yourself
 
 ```bash
-node host/selftest.mjs
+node host/selftest.mjs              # protocol, both sides, no device needed
+python tools/check-device-python.py  # before you copy anything to a device
+node host/watch-sleep.mjs --need 3  # on a real device: prove it wakes ITSELF
 ```
 
-Plays both sides locally: 401 without credentials, 401 on a stale timestamp, 401 with the
-wrong secret, long-poll really holds, the body is the command, a one-byte change breaks
-the signature, results are stored and jobs cleared.
+`host/selftest.mjs` plays both sides locally: 401 without credentials, 401 on a stale
+timestamp, 401 with the wrong secret, long-poll really holds, the body is the command, a
+one-byte change breaks the signature, results are stored and jobs cleared.
 
 Expected: `RESULT: 10 passed, 0 failed`.
+
+`tools/check-device-python.py` parses every device script and flags the failure mode that
+`ast.parse` cannot see: **a call to a name that no longer exists** (the stale half of a
+rename). It also catches a UTF-8 BOM and CRLF/non-ASCII in the shell scripts. Do this before
+copying anything onto a device you cannot easily debug.
+
+`host/watch-sleep.mjs` is the one that matters most, because "it woke up once" proves
+nothing — a device can wake twice and then lose the suspend race and sleep until you press
+the power button. This watches until it has **N consecutive self-wakes with nobody touching
+the device**, and fails loudly on a gap or on a `resumed from a powerd-owned suspend` line.
+
+```bash
+node host/watch-sleep.mjs --minutes 75 --need 3 --interval 300
+# PASS 3 consecutive self-wakes, worst gap 301s
+```
+
+Leave the device alone while it runs (it needs the screen to go off by itself; if you are
+reading, its verdict is INCONCLUSIVE, which is not a failure). The same rule runs on the
+device as an assertion about the screen-state classification:
+
+```bash
+node host/hyKBridge.mjs device put device/tests/pulse-unit.py \
+     /mnt/us/extensions/hyKBridge/state/pulse-unit.py --write
+node host/hyKBridge.mjs device exec \
+     '/mnt/us/python3/bin/python3.9 /mnt/us/extensions/hyKBridge/state/pulse-unit.py'
+# RESULT: 5 passed, 0 failed
+```
 
 The banner goes to **stderr** for `exec` / `push` / `result`, so stdout stays pipeable;
 set `HYKBRIDGE_QUIET=1` to drop it entirely.
@@ -223,12 +264,15 @@ never expose the host to the internet.
 ```
 host/hyKBridge.mjs        host application (single file, zero npm dependencies)
 host/selftest.mjs         protocol test
+host/watch-sleep.mjs      on a real device: watch until N consecutive self-wakes are proven
+tools/check-device-python.py  pre-deploy lint of the device scripts (stale-rename detection)
 device/config.xml         KUAL extension manifest
 device/menu.json          KUAL menu
 device/server/hyKBridge.py    device service: exec / files / books / plugins / pairing
 device/bin/hyKBridge-pulse.py the wake-poll-sleep client
 device/bin/banner.sh          the copyright banner (sourced by every script)
 device/bin/*.sh               start / stop / restart / status / log / pairing code / keep-awake
+device/tests/pulse-unit.py    on-device assertion for the screen-state rule
 docs/AGENT.md                 how an agent framework drives it (contract + safety)
 ```
 
