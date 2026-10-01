@@ -17,13 +17,16 @@ two complementary channels:
 |---|---|---|
 | Who connects | the **device** polls the host | the **host** calls the device |
 | Device asleep | **works** — it fetches work on its next wake | fails fast (exit 4) |
-| Latency | up to one pulse interval (default 900 s) | instant |
+| Latency | up to one pulse interval (default 300 s) | instant |
 | Capability | run one command, push one file, read the result | everything: exec, files, library, extensions, power |
 | Auth | mutual HMAC with the paired secret | device token (`X-Auth`) |
 
 **Waking the device is a derived problem.** What this project is *for* is getting a shell
 and operations onto the device; the pulse loop exists so the direct channel stays
-reachable at any hour, and it never forces a suspend.
+reachable at any hour. **Pulse owns the suspend**: when the screen is already off it
+puts the device to sleep with `rtcwake -m mem` and the RTC alarm wakes it for the next
+cycle, so the device really does sleep between polls — and it never suspends while you
+are reading.
 
 Tested on a jailbroken Kindle Paperwhite 3 (KUAL + Kindle Python 3.9).
 
@@ -134,9 +137,17 @@ Add `--json` to any subcommand to get a single JSON object on stdout and a stabl
 code (0 ok / 1 error / 2 usage / 3 no token / 4 device unreachable / 124 timeout).
 
 On the device, **hyKBridge → Pulse: Start** begins the wake-poll-sleep loop
-(`state/pulse-interval`, default 900 s). Pulse never forces a suspend and never holds the screen saver off: it only arms an
-RTC alarm and lets the system sleep when it wants, so using the device is never
-interrupted.
+(`state/pulse-interval`, default 300 s). Pulse **owns the suspend**: if the screen is
+already off it suspends with `rtcwake -m mem` and the RTC alarm wakes it for the next
+cycle; while you are reading it never suspends anything. The interval is therefore just a
+latency/battery trade-off — every wake costs one WiFi re-association.
+
+> Why not simply "arm the alarm and let the device sleep by itself"? Measured on a real
+> PW3 (2026-10-01): a **powerd-initiated** suspend never honours a pre-armed alarm — the
+> device slept 4.4 hours with zero polls (its `powerd` owns the RTC and wipes it when it
+> suspends on its own). When the suspend is initiated by us — `rtcwake -m mem -s 60` or a
+> hand-armed alarm followed by `echo mem` — the alarm always fires. Same device, same
+> alarm, opposite outcome; the only variable is *who* initiates the suspend.
 
 ## Endpoints
 

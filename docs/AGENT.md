@@ -12,7 +12,7 @@ problem: we solve it so that access is available at any time, not for its own sa
 |---|---|---|
 | Who starts the connection | the **device** (it polls the host) | the **host** (it calls the device) |
 | Works while the device is asleep | **yes** — the device fetches on its next wake | no — you get exit code `4` |
-| Latency | up to one pulse interval (default 900 s) | instant |
+| Latency | up to one pulse interval (default 300 s) | instant |
 | Capability | run a command, push a file, read the result | everything: exec, files, library, extensions, power |
 | Auth | mutual HMAC over the paired secret | device token (`X-Auth`) |
 | Commands | `exec` `push` `list` `result` | `device <cmd>` |

@@ -80,6 +80,67 @@ def _dec(b):
     return b.decode('utf-8', 'replace') if b else ''
 
 
+def power_state():
+    return sh('lipc-get-prop com.lab126.powerd state')[1].strip().lower()
+
+
+def wait_for_network(timeout=45):
+    """Wait until wlan0 actually has an IP.
+
+    Measured 2026-10-01: right after a resume the WiFi needs several seconds to
+    associate. Cycle 2 in the field ran 4 seconds after the device was woken by hand,
+    found no host, and silently did nothing -- the queued job was never fetched.
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        rc, out = sh("ifconfig wlan0 2>/dev/null | grep -c 'inet addr'")
+        if out.strip().startswith('1'):
+            return True
+        time.sleep(3)
+    log('  WARNING: wlan0 has no IP after %ds -- polling anyway' % timeout)
+    return False
+
+
+def sleep_until_next_cycle(cycle, interval):
+    """Suspend until the next cycle -- with rtcwake, which is the only thing that works.
+
+    ★ Measured 2026-10-01, and this is why the job queue sat untouched for 4.4 hours:
+      writing `+900` into /sys/class/rtc/rtc0/wakealarm *reads back correctly* (the kernel
+      converts it to a proper epoch) and /proc/driver/rtc shows the alarm set -- but the
+      device NEVER woke: the pulse process stayed frozen and not one cycle was logged.
+      `rtcwake -d /dev/rtc0 -m mem -s 60` suspends and comes back reliably, because it
+      sets the alarm through the RTC ioctl and owns the suspend itself.
+
+    Guard: only suspend when the screen is already off. If the user is reading
+    (state is not screenSaver/Ready) we just wait -- using the device is never interrupted.
+    """
+    st = power_state()
+    if st not in ('screensaver', 'ready'):
+        log('cycle %d: NOT suspending (powerd=%s -- user is using it); wait %ds' % (cycle, st or '?', interval))
+        deadline = time.time() + interval
+        while os.path.exists(FLAG) and time.time() < deadline:
+            time.sleep(3)
+        return
+    if os.path.exists('/usr/sbin/rtcwake'):
+        # explicit timeout: sh() wraps commands with timeout(1), and the default would
+        # kill rtcwake long before the alarm fires
+        sh('sync')
+        rc, out = sh('/usr/sbin/rtcwake -d /dev/rtc0 -m mem -s %d' % interval, timeout=interval + 300)
+        log('cycle %d: rtcwake -m mem -s %d returned rc=%s -- awake again' % (cycle, interval, rc))
+        return
+    # Fallback (no rtcwake on this build): arm by hand, then suspend. Kept so an older
+    # device still limps along; on this PW3 the hand-armed alarm does NOT wake it.
+    alarm = arm_alarm(interval)
+    if not alarm:
+        log('cycle %d: no alarm armed -- NOT suspending (it would never wake)' % cycle)
+        deadline = time.time() + interval
+        while os.path.exists(FLAG) and time.time() < deadline:
+            time.sleep(3)
+        return
+    log('cycle %d: alarm=%s (no rtcwake available) -- suspending by hand' % (cycle, alarm))
+    sh('sync; echo mem > /sys/power/state')
+
+
 def read_state(name, default=None):
     try:
         with open(os.path.join(STATE, name)) as f:
@@ -348,17 +409,17 @@ def main():
         log('paired record has no secret')
         return 1
 
-    # ★ The interval MUST be longer than the screen-saver idle timeout (about 10 min on
-    # this device, measured 2026-10-01), otherwise the poll itself keeps the device awake
-    # forever: every cycle resets the idle timer, so it never reaches the screen saver and
-    # never suspends. Measured: at 120 s the device answered 10/10 reachability probes over
-    # 2.5 min and the battery fell 92% -> 86% in a day while doing nothing; at 900 s it went
-    # to screenSaver and slept, and the RTC alarm wakes it for the next cycle.
-    # Trade-off: a longer interval means a queued job waits longer before it is picked up.
+    # Interval = how often the device wakes up to poll. Now that the loop OWNS the suspend
+    # (rtcwake), this is a plain latency/battery trade-off -- it no longer decides *whether*
+    # the device can sleep at all. (An earlier version armed the alarm by hand and let powerd
+    # suspend on its own; measured 2026-10-01, a powerd-initiated suspend NEVER honours a
+    # pre-armed alarm: the device slept 4.4 hours with zero cycles. See sleep_until_next_cycle.)
+    # Cost per wake = WiFi re-association + a few seconds of CPU. 900 s is the gentle default;
+    # lower it if a queued book should arrive sooner.
     interval = int(read_state('pulse-interval', '900') or 900)
     log('== HyKBridge by HYrecovery & HoshinoSumi from teko.IO SisTemS! ==')
     log('== Under MIT Open Source License ==')
-    log('pulse START interval=%ds host=%s (arm-only: never suspends, never holds the screen saver off)' % (interval, rec.get('host_ip')))
+    log('pulse START interval=%ds host=%s (owns the suspend via rtcwake when the screen is off)' % (interval, rec.get('host_ip')))
     eips(3, 'hyKBridge pulse: every %ds' % interval)
 
     cycle = 0
@@ -388,19 +449,25 @@ def main():
         # of idle time, so a cycle can never be interrupted by a suspend. If the user
         # WANTS the device held awake, that is the opt-in state/keep-awake flag's job
         # (keepawake.sh on / start.sh), not the poll loop's.
+        # After a resume the WiFi needs a few seconds to re-associate; polling immediately
+        # is why cycle 2 in the field found no host and silently did nothing.
+        wait_for_network(45)
         ip, port = find_host(rec)
         if ip:
             remember(rec, ip, port)
             deliver_outbox(rec, ip, port)
             do_cycle(rec, interval)
+        else:
+            # Say it out loud: silence here is how "the queue sat untouched for an hour"
+            # stayed invisible -- a failed discovery used to produce no log line at all.
+            log('cycle %d: host NOT found (no network? wifi down?) -- nothing polled' % cycle)
 
         if not os.path.exists(FLAG):
             break
-        alarm = arm_alarm(interval)
-        deadline = time.time() + interval
-        log('cycle %d: alarm=%s idle wait %ds' % (cycle, alarm or 'FAILED', interval))
-        while os.path.exists(FLAG) and time.time() < deadline:
-            time.sleep(3)
+        # OWN the suspend. Measured 2026-10-01: if powerd is allowed to suspend the device
+        # by itself, a pre-armed alarm is never honoured (4.4 hours asleep, zero cycles);
+        # when the suspend is initiated here, the alarm always fires. See sleep_until_next_cycle().
+        sleep_until_next_cycle(cycle, interval)
 
     log('pulse STOP')
     eips(3, 'hyKBridge pulse: stopped')
