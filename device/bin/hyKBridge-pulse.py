@@ -103,12 +103,41 @@ def screen_is_off(state=None):
     return (state if state is not None else power_state()) in SCREEN_OFF_STATES
 
 
-def wait_for_network(timeout=45):
+# ── wall-clock watchdog for the cycle body ────────────────────────
+# A suspend that lands INSIDE our own awake window leaves no trace by itself: the process
+# simply stops and later continues. On 2026-10-01 cycle 19 woke at 17:05:16, got suspended
+# while waiting for the network, and logged nothing again until a human pressed the power
+# button at 21:27:38 -- 4h22m, and the log looked like a device that had simply gone quiet.
+# tick() is called at every step of the body; a jump larger than a few seconds can only mean
+# we were suspended, and if powerd did it, our alarm was cleared and only a human can end it.
+_CYCLE = [0]
+_LAST_TICK = [0.0]
+
+
+def tick(where):
+    now = time.time()
+    if _LAST_TICK[0] and (now - _LAST_TICK[0]) > 30:
+        log('cycle %d: *** SUSPENDED MID-CYCLE %s -- gap %ds. That suspend was powerd\'s, '
+            'so our alarm was cleared and only a human can end it ***'
+            % (_CYCLE[0], where, int(now - _LAST_TICK[0])))
+        eips(3, 'hyKBridge: suspended mid-cycle (%ds)' % int(now - _LAST_TICK[0]))
+    _LAST_TICK[0] = now
+
+
+def wait_for_network(timeout=15):
     """Wait until wlan0 actually has an IP.
 
     Measured 2026-10-01: right after a resume the WiFi needs several seconds to
     associate. Cycle 2 in the field ran 4 seconds after the device was woken by hand,
     found no host, and silently did nothing -- the queued job was never fetched.
+
+    ★ Why this is 15 s and not 45 (2026-10-01 21:2x, cost 4h22m of dead air):
+      while the WiFi was down, every cycle burned the whole 45 s here with no IP --
+      which TRIPLED the awake window. powerd watches the screen, and a long awake
+      window is exactly the window in which it can suspend us; a suspend powerd owns is
+      never woken by our alarm. The device then sat suspended for 4 hours 22 minutes
+      until a human pressed the power button. No network means nothing to poll anyway,
+      so bailing out early is both correct and safer.
     """
     end = time.time() + timeout
     while time.time() < end:
@@ -116,7 +145,7 @@ def wait_for_network(timeout=45):
         if out.strip().startswith('1'):
             return True
         time.sleep(3)
-    log('  WARNING: wlan0 has no IP after %ds -- polling anyway' % timeout)
+    log('  WARNING: wlan0 has no IP after %ds -- skipping this cycle (nothing to poll, and a long awake window is how we lose the suspend race)' % timeout)
     return False
 
 
@@ -374,7 +403,14 @@ def do_cycle(rec, interval):
 
     path = '/next?dev=%s&hold=20' % rec['device_id']
     code, body, hdrs = get(rec, ip, port, path, timeout=30)
-    if code == 204 or code == 0:
+    if code == 204:
+        return
+    if code == 0:
+        # ★ Was silent until 2026-10-01 21:2x. A poll that never reached the host looked
+        # exactly like "no work to do", so two whole cycles (17 and 18) vanished from the
+        # log while the WiFi was down -- the only visible trace was a frozen `last_seen`
+        # on the host. A dead poll must say so.
+        log('poll FAILED this cycle (could not reach %s:%s) -- nothing fetched' % (ip, port))
         return
     if code != 200:
         log('next -> HTTP %s' % code)
@@ -485,6 +521,7 @@ def main():
     cycle = 0
     while os.path.exists(FLAG):
         cycle += 1
+        _CYCLE[0] = cycle
         if wireless_off():
             try:
                 with open(RTC, 'w') as f:
@@ -509,14 +546,29 @@ def main():
         # of idle time, so a cycle can never be interrupted by a suspend. If the user
         # WANTS the device held awake, that is the opt-in state/keep-awake flag's job
         # (keepawake.sh on / start.sh), not the poll loop's.
+        #
+        # ★ ...but a cycle CAN be interrupted (measured 2026-10-01 21:2x, 4h22m of dead
+        #   air): a powerd-owned suspend landing inside the awake window is unwakeable, and
+        #   the wake it interrupts is our own. So we now watch the wall clock at every step
+        #   of the body -- a jump means we were suspended mid-cycle, which used to leave no
+        #   trace at all (cycle 19 simply stopped logging for 4 hours).
         # After a resume the WiFi needs a few seconds to re-associate; polling immediately
         # is why cycle 2 in the field found no host and silently did nothing.
-        wait_for_network(45)
+        tick('after wake')
+        if not wait_for_network(15):
+            tick('while waiting for the network')
+            if not os.path.exists(FLAG):
+                break
+            sleep_until_next_cycle(cycle, interval)
+            continue
+        tick('while waiting for the network')
         ip, port = find_host(rec)
+        tick('while looking for the host')
         if ip:
             remember(rec, ip, port)
             deliver_outbox(rec, ip, port)
             do_cycle(rec, interval)
+            tick('while polling')
         else:
             # Say it out loud: silence here is how "the queue sat untouched for an hour"
             # stayed invisible -- a failed discovery used to produce no log line at all.

@@ -8,6 +8,11 @@ host/_last_job.txt
 # device-side state (lives on the Kindle, but never let a stray copy in)
 device/state/
 
+# internal working notes -- THIS DIRECTORY IS THE PUBLIC REPO ROOT (push-dir.mjs pushes it),
+# so any field notes dropped here would be published. Keep them local.
+CHECKPOINT.md
+*.internal.md
+
 *.log
 *.pyc
 __pycache__/

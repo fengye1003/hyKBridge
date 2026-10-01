@@ -201,6 +201,24 @@ So the interval is only a latency/battery trade-off (every wake costs one WiFi
 re-association). If the loop is not running -- or powerd wins the race -- the device sleeps
 until a human wakes it; that is inherent, and it is why **Pulse: Start** matters.
 
+### Keeping the awake window short is a safety property, not an optimisation
+
+The loop can also lose the race *inside* its own awake window: a suspend powerd starts while
+we are waiting for WiFi or holding a long-poll is unwakeable, and until 2026-10-01 that left
+**no trace at all** in the log -- the device simply went quiet for 4 h 22 m and looked like it
+was idling normally. Three consequences are now baked in:
+
+* **A failed poll says so.** `code == 0` (the request never reached the host) used to share a
+  silent early-return with `204` ("no work"), so two whole cycles vanished from the log while
+  the WiFi was down. It now logs `poll FAILED this cycle`.
+* **No network means no waiting.** `wait_for_network` is 15 s, not 45, and a cycle with no IP
+  skips straight back to sleep. Burning 45 s tripled the awake window exactly when the device
+  had nothing to poll -- and the awake window is the window in which powerd can take the
+  suspend away from us.
+* **A mid-cycle suspend is named.** The wall clock is checked at every step of the loop body;
+  a jump over 30 s logs `*** SUSPENDED MID-CYCLE ... that suspend was powerd's, so only a
+  human can end it ***` and puts it on the e-ink screen.
+
 ## Endpoints
 
 | Method | Path | Auth | Purpose |
