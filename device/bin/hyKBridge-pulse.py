@@ -348,7 +348,14 @@ def main():
         log('paired record has no secret')
         return 1
 
-    interval = int(read_state('pulse-interval', '120') or 120)
+    # ★ The interval MUST be longer than the screen-saver idle timeout (about 10 min on
+    # this device, measured 2026-10-01), otherwise the poll itself keeps the device awake
+    # forever: every cycle resets the idle timer, so it never reaches the screen saver and
+    # never suspends. Measured: at 120 s the device answered 10/10 reachability probes over
+    # 2.5 min and the battery fell 92% -> 86% in a day while doing nothing; at 900 s it went
+    # to screenSaver and slept, and the RTC alarm wakes it for the next cycle.
+    # Trade-off: a longer interval means a queued job waits longer before it is picked up.
+    interval = int(read_state('pulse-interval', '900') or 900)
     log('== HyKBridge by HYrecovery & HoshinoSumi from teko.IO SisTemS! ==')
     log('== Under MIT Open Source License ==')
     log('pulse START interval=%ds host=%s (arm-only: never suspends, never holds the screen saver off)' % (interval, rec.get('host_ip')))
