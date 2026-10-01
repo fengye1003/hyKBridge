@@ -9,6 +9,14 @@
 anything similar) and for you, from a computer on the same LAN: shell commands, files,
 the book library, KUAL extensions. No cloud, no accounts, no third-party server.
 
+> **Scope — this is a base layer, not an application.** hyKBridge does exactly one thing:
+> remote shell and device operations. It ships no features of its own, it does not know
+> what runs on top of it, and it does not change its protocol for any particular use.
+> Anything built on it (pushing, syncing, dashboards, scheduled jobs…) is a **separate
+> project with its own docs and its own repository**, depending on hyKBridge in one
+> direction only. Keeping this layer small and boring is the point: the smaller it is, the
+> more things can safely grow on top of it.
+
 The device spends most of its life asleep, and a suspended device has **no network
 stack** — so "connect to it" is not a thing that can work. hyKBridge covers that with
 two complementary channels:
