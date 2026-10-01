@@ -176,6 +176,19 @@ Three measured facts (real PW3, 2026-10-01) are the whole reason for that shape:
   so it polls immediately. In the field this is what made a hand-woken device fetch the
   waiting 7 MB book **6 s** after the power button was pressed.
 
+The shipped behaviour, as observed after the fix — nobody touched the device for this:
+
+```
+16:17:52 cycle 9:  screen went off (powerd=screensaver) -- taking over the suspend now
+16:23:14 cycle 10: rtcwake -m mem -s 300 returned rc=0 -- awake again     (322 s later)
+16:28:41 cycle 11: rtcwake -m mem -s 300 returned rc=0 -- awake again     (327 s later)
+```
+
+Two self-wakes in a row, each ~300 s plus the ~20-27 s a cycle needs, with **no
+"not suspending" wait in between** and no `resumed from a powerd-owned suspend`. At 16:28:45
+powerd was reporting `readyToSuspend` — the same state, different capitalisation, that used
+to cost 29 minutes — and the loop put the device straight back to sleep anyway.
+
 So the interval is only a latency/battery trade-off (every wake costs one WiFi
 re-association). If the loop is not running -- or powerd wins the race -- the device sleeps
 until a human wakes it; that is inherent, and it is why **Pulse: Start** matters.
@@ -219,9 +232,16 @@ the power button. This watches until it has **N consecutive self-wakes with nobo
 the device**, and fails loudly on a gap or on a `resumed from a powerd-owned suspend` line.
 
 ```bash
-node host/watch-sleep.mjs --minutes 75 --need 3 --interval 300
+node host/watch-sleep.mjs --minutes 75 --need 3 --interval 300 --poll 60000
 # PASS 3 consecutive self-wakes, worst gap 301s
 ```
+
+**Keep `--poll` well under the device's awake window.** Each cycle the device is awake for
+only ~20-40 s, and this watcher talks to it over the DIRECT channel, which only answers while
+it is awake. A 3-minute poll mostly misses those windows and prints a run of
+`device asleep` for a device that is waking perfectly on schedule — a missed probe is *not*
+evidence of a missed wake, which is why the verdict comes from the log's timestamps and not
+from how many probes succeeded.
 
 Leave the device alone while it runs (it needs the screen to go off by itself; if you are
 reading, its verdict is INCONCLUSIVE, which is not a failure). The same rule runs on the

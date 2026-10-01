@@ -5,7 +5,15 @@
 // book sat for 29 minutes. The only thing that proves the fix is *consecutive self-wakes
 // while nobody touches the device*, so this samples until it has them.
 //
-//   node host/_watch-sleep.mjs [--minutes 60] [--need 3] [--interval 300]
+//   node host/watch-sleep.mjs [--minutes 60] [--need 3] [--interval 300] [--poll 60000]
+//
+// ★ SET --poll SHORTER THAN THE DEVICE'S AWAKE WINDOW. Each cycle the device is only awake
+//   for ~20-40 s (long-poll + wifi re-association) out of every --interval seconds, and this
+//   watcher reads the device through the DIRECT channel -- which only answers while it is
+//   awake. The default 60 s poll catches those windows; an earlier 180 s poll mostly did not,
+//   and printed a run of "device asleep" for a device that was in fact waking perfectly on
+//   schedule (the on-device log proved it afterwards). A missed probe is NOT evidence of a
+//   missed wake -- that is what the FAIL rules below are for.
 //
 // PASS  >= --need rtcwake cycles after the last START, every gap within the interval,
 //       and no "resumed from a powerd-owned suspend" in that run (that line means powerd
